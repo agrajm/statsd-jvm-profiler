@@ -6,6 +6,9 @@ import sys
 import re
 import os
 import shutil
+import urllib2
+import json
+import datetime
 
 class InfluxDBDump:
     def __init__(self, host, port, username, password, database, prefix, tag_mapping, filter_filename, out_dir, sort_order, start_time, end_time):
@@ -195,7 +198,17 @@ def get_arg_parser():
     parser.add_option('-s', '--sortorder', dest='sortorder', help='Sort Order: 0 (default) = by names, 1 = by linenumbers, 2 = skip linenumbers', metavar='FILEPREFIX')
     parser.add_option('--start-time', dest='start_time', help='Start time of format 2000-01-01T00:00:00Z', metavar='START_TIME')
     parser.add_option('--end-time', dest='end_time', help='End time of format 2000-01-01T00:00:00Z', metavar='END_TIME')
+    parser.add_option('--yarn-application-timestamps', action="store_true", dest='yarn_application_timestamps', help='Filter by yarn application start time and end time. Requires --yarn-aplication-master and --yarn-application-id arguments', metavar='YARN_APPLICATION_TIMESTAMPS')
+    parser.add_option('--yarn-application-master', dest='yarn_application_master', help='Yarn application master url of format host:port', metavar='YARN_APPLICATION_MASTER')
+    parser.add_option('--yarn-application-id', dest='yarn_application_id', help='Yarn application id', metavar='YARN_APPLICATION_ID')
     return parser
+
+def get_yarn_timestamps(url, application_id):
+    response = urllib2.urlopen('http://' + url + '/ws/v1/cluster/apps/' + application_id)
+    app_info = json.load(response)
+    startedTimestamp = app_info['app']['startedTime']
+    finishedTimestamp = app_info['app']['finishedTime']
+    return (startedTimestamp,finishedTimestamp)
 
 if __name__ == '__main__':
     parser = get_arg_parser()
@@ -210,6 +223,22 @@ if __name__ == '__main__':
     sort_order = args.sortorder or "0"
     start_time = args.start_time or None
     end_time = args.end_time or None
+    if args.yarn_application_timestamps:
+        if not(args.yarn_application_master and args.yarn_application_id):
+            parser.print_help()
+            sys.exit(255)
+        influx_timestamp_format = "%Y-%m-%dT%H:%M:%SZ"
+        yarn_timestamps = get_yarn_timestamps(args.yarn_application_master, args.yarn_application_id)
+        yarn_started_time = yarn_timestamps[0]
+        yarn_finished_time = yarn_timestamps[1]
+        if (yarn_started_time > 0):
+            yarn_started_datetime = datetime.datetime.utcfromtimestamp(long(yarn_started_time)/1000)
+            yarn_started_time_str = yarn_started_datetime.strftime(influx_timestamp_format)
+            start_time = yarn_started_time_str
+        if (yarn_finished_time > 0):
+            yarn_finished_datetime = datetime.datetime.utcfromtimestamp(long(yarn_finished_time)/1000)
+            yarn_finished_time_str = yarn_finished_datetime.strftime(influx_timestamp_format)
+            end_time = yarn_finished_time_str
 
     dumper = InfluxDBDump(args.host, port, args.username, args.password, args.database, args.prefix, tag_mapping, filter_filename, out_dir, sort_order, start_time, end_time)
     dumper.run()
